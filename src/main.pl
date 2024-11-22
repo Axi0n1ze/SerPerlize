@@ -34,7 +34,7 @@ my %file_signatures = (
 
 # 파일 시그니처 읽기 함수
 sub get_file_signature {
-
+    
     my ($file) = @_;
 
     open my $fh, '<', $file or die "파일을 열 수 없습니다: '$file': $!";
@@ -67,26 +67,59 @@ sub check_bof_vulnerability {
     if ($content =~ /(\x90{8,}|A{256,})/) {
 
         return 1;  # BOF 가능성 있음
-    
+
     }
-    
+
     return 0;  # BOF 가능성 없음
+
+}
+
+# APK 및 IPA 디컴파일 함수
+sub decompile_file {
+
+    my ($file, $extension) = @_;
+
+    if ($extension eq 'apk') {
+
+        my $output_dir = "${file}_decompiled";
+
+        system("jadx -d $output_dir $file") == 0
+
+            or die "APK 디컴파일 실패: $!";
+
+        print "APK 파일이 디컴파일되었습니다: $output_dir\n";
+
+    } elsif ($extension eq 'ipa') {
+
+        my $output_dir = "${file}_decompiled";
+
+        system("class-dump -o $output_dir $file") == 0
+
+            or die "IPA 디컴파일 실패: $!";
+
+        print "IPA 파일이 디컴파일되었습니다: $output_dir\n";
+
+    } else {
+
+        die "지원되지 않는 디컴파일 형식: .$extension\n";
+
+    }
 
 }
 
 # 메인 프로그램
 if (@ARGV < 1) {
 
-    die "사용법: $0 [-PE] <파일 경로>\n";
+    die "사용법: $0 [-PE|-m] <파일 경로>\n";
 
 }
 
 my $option = "";
 my $file;
 
-if ($ARGV[0] eq '-PE') {
+if ($ARGV[0] eq '-PE' || $ARGV[0] eq '-m') {
 
-    $option = '-PE';
+    $option = $ARGV[0];
 
     $file = $ARGV[1] or die "파일 경로를 제공하세요.\n";
 
@@ -101,55 +134,69 @@ my $extension = lc((fileparse($file, qr/\.[^.]*/))[2]);  # 확장자 추출
 $extension =~ s/^\.//;  # '.' 제거
 
 # 시그니처 정의 확인
-
-if (!exists $file_signatures{$extension}) {
+if (!exists $file_signatures{$extension} && $option ne '-m') {
 
     die "지원되지 않는 파일 확장자: .$extension\n";
 
 }
 
-# 예상 시그니처 가져오기
-my $expected_signatures = $file_signatures{$extension};
+if ($option eq '-m') {
 
-# 실제 시그니처 가져오기
-my $actual_signature = get_file_signature($file);
+    if ($extension eq 'apk' || $extension eq 'ipa') {
 
-# 시그니처 비교
-my $match_found = 0;
+        decompile_file($file, $extension);
+        
+    } else {
 
-foreach my $expected_signature (@$expected_signatures) {
-
-    if ($actual_signature =~ /^\Q$expected_signature/) {
-
-        $match_found = 1;
-
-        last;
+        die "-m 옵션은 APK 또는 IPA 파일에서만 사용할 수 있습니다.\n";
 
     }
+} else {
+    
+    # 예상 시그니처 가져오기
+    my $expected_signatures = $file_signatures{$extension};
 
-}
+    # 실제 시그니처 가져오기
+    my $actual_signature = get_file_signature($file);
 
-if ($match_found) {
+    # 시그니처 비교
+    my $match_found = 0;
 
-    print "파일 시그니처가 예상된 파일 유형과 일치합니다: .$extension\n";
+    foreach my $expected_signature (@$expected_signatures) {
 
-    # EXE 파일 처리 (BOF 탐지)
-    if ($option eq '-PE' && $extension eq 'exe') {
+        if ($actual_signature =~ /^\Q$expected_signature/) {
 
-        if (check_bof_vulnerability($file)) {
+            $match_found = 1;
 
-            print "경고: $file 에서 잠재적인 BOF 취약점이 발견되었습니다.\n";
-
-        } else {
-
-            print "$file 에서 BOF 취약점이 발견되지 않았습니다.\n";
+            last;
 
         }
 
     }
 
-} else {
+    if ($match_found) {
 
-    print "파일 시그니처가 일치하지 않습니다! 예상: .$extension, 실제: 다른 시그니처.\n";
-    
+        print "파일 시그니처가 예상된 파일 유형과 일치합니다: .$extension\n";
+
+        # EXE 파일 처리 (BOF 탐지)
+        if ($option eq '-PE' && $extension eq 'exe') {
+
+            if (check_bof_vulnerability($file)) {
+
+                print "경고: $file 에서 잠재적인 BOF 취약점이 발견되었습니다.\n";
+
+            } else {
+
+                print "$file 에서 BOF 취약점이 발견되지 않았습니다.\n";
+
+            }
+        }
+
+    } else {
+
+        print "파일 시그니처가 일치하지 않습니다! 예상: .$extension, 실제: 다른 시그니처.\n";
+   
+    }
+
 }
+
