@@ -6,12 +6,29 @@ use File::Basename;
 # 파일 시그니처 정의
 my %file_signatures = (
 
-    'exe' => "MZ",           # EXE 파일의 시그니처
-    'png' => "\x89PNG",      # PNG 파일의 시그니처
-    'jpg' => "\xFF\xD8\xFF", # JPG 파일의 시그니처
-    'gif' => "GIF",          # GIF 파일의 시그니처
-    'pdf' => "%PDF",         # PDF 파일의 시그니처
-    # 추가적인 파일 형식 및 시그니처는 여기서 정의 가능
+    'pdf'  => [ "%PDF" ],
+    'gif'  => [ "GIF87a", "GIF89a" ],
+    'png'  => [ "\x89PNG\x0d\x0a\x1a\x0a" ],
+    'jpg'  => [ "\xff\xd8\xff\xe0", "\xff\xd8\xff\xe1", "\xff\xd8\xff\xe8", "\xff\xd8\xff\xdb", "\xff\xd8\xff\xee" ],
+    'zip'  => [ "PK\x03\x04" ],
+    'exe'  => [ "MZ" ],
+    'msi'  => [ "MZ" ],
+    'ico'  => [ "\x00\x00\x01\x00" ],
+    'cur'  => [ "\x00\x00\x02\x00" ],
+    'bmp'  => [ "BM" ],
+    'tar'  => [ "ustar" ],
+    'gz'   => [ "\x1f\x8b\x08", "\x1f\x9d", "\x1f\xa0" ],
+    'avi'  => [ "RIFF" ],
+    'wav'  => [ "RIFF" ],
+    'mp3'  => [ "ID3", "\xff\xfb" ],
+    'doc'  => [ "\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "\xec\xa5\xc1\x00", "\xbe\x00\x00\x00\xab\x00\x00\x00" ],
+    'xls'  => [ "\xfd\xff\xff\xff", "\xfe\xff" ],
+    'ppt'  => [ "\x00\x6e\x1e\xf0", "\xfd\xff\xff\xff" ],
+    'mp4'  => [ "\x00\x00\x00\x18ftyp" ],
+    'mov'  => [ "moov" ],
+    'docx' => [ "PK\x03\x04" ],
+    'pptx' => [ "PK\x03\x04" ],
+    'xlsx' => [ "PK\x03\x04" ],
 
 );
 
@@ -19,10 +36,15 @@ my %file_signatures = (
 sub get_file_signature {
 
     my ($file) = @_;
+
     open my $fh, '<', $file or die "파일을 열 수 없습니다: '$file': $!";
-    binmode $fh;  # 이진 모드로 파일 열기
-    read $fh, my $signature, 4;  # 처음 4바이트 읽기 (필요 시 길이 조정 가능)
+
+    binmode $fh;
+
+    read $fh, my $signature, 8;  # 최대 8바이트 읽기
+
     close $fh;
+
     return $signature;
 
 }
@@ -31,34 +53,54 @@ sub get_file_signature {
 sub check_bof_vulnerability {
 
     my ($file) = @_;
-    
-    # 간단한 BOF 탐지 로직: 실제 사용 시 더 정교한 분석 필요
+
     open my $fh, '<', $file or die "파일을 열 수 없습니다: '$file': $!";
-    binmode $fh;  # 이진 모드로 파일 열기
+
+    binmode $fh;
+
     my $content;
-    read $fh, $content, -s $file;  # 파일 전체 내용을 읽음
+
+    read $fh, $content, -s $file;  # 파일 전체 읽기
+
     close $fh;
+
+    if ($content =~ /(\x90{8,}|A{256,})/) {
+
+        return 1;  # BOF 가능성 있음
     
-    # 간단한 패턴 탐지: NOP sled(\x90) 또는 반복 문자 (A) 패턴
-    if ($content =~ /(\x90{8,}|A{256,})/) { 
-        return 1;  # BOF 가능성이 있음
     }
+    
     return 0;  # BOF 가능성 없음
 
 }
 
 # 메인 프로그램
-if (@ARGV != 1) {
+if (@ARGV < 1) {
 
-    die "사용법: $0 <파일 경로>\n";
+    die "사용법: $0 [-PE] <파일 경로>\n";
 
 }
 
-my $file = $ARGV[0];
+my $option = "";
+my $file;
 
-my $extension = lc((fileparse($file, qr/\.[^.]*/))[2]);  # 파일 확장자 추출
+if ($ARGV[0] eq '-PE') {
 
-$extension =~ s/^\.//;  # 확장자에서 선행 '.' 제거
+    $option = '-PE';
+
+    $file = $ARGV[1] or die "파일 경로를 제공하세요.\n";
+
+} else {
+
+    $file = $ARGV[0];
+
+}
+
+my $extension = lc((fileparse($file, qr/\.[^.]*/))[2]);  # 확장자 추출
+
+$extension =~ s/^\.//;  # '.' 제거
+
+# 시그니처 정의 확인
 
 if (!exists $file_signatures{$extension}) {
 
@@ -66,19 +108,33 @@ if (!exists $file_signatures{$extension}) {
 
 }
 
-# 예상되는 시그니처 가져오기
-my $expected_signature = $file_signatures{$extension};
+# 예상 시그니처 가져오기
+my $expected_signatures = $file_signatures{$extension};
 
-# 실제 파일의 시그니처 가져오기
+# 실제 시그니처 가져오기
 my $actual_signature = get_file_signature($file);
 
 # 시그니처 비교
-if ($actual_signature =~ /^\Q$expected_signature/) {
+my $match_found = 0;
+
+foreach my $expected_signature (@$expected_signatures) {
+
+    if ($actual_signature =~ /^\Q$expected_signature/) {
+
+        $match_found = 1;
+
+        last;
+
+    }
+
+}
+
+if ($match_found) {
 
     print "파일 시그니처가 예상된 파일 유형과 일치합니다: .$extension\n";
-    
-    # EXE 파일일 경우 BOF 탐지
-    if ($extension eq 'exe') {
+
+    # EXE 파일 처리 (BOF 탐지)
+    if ($option eq '-PE' && $extension eq 'exe') {
 
         if (check_bof_vulnerability($file)) {
 
@@ -95,5 +151,5 @@ if ($actual_signature =~ /^\Q$expected_signature/) {
 } else {
 
     print "파일 시그니처가 일치하지 않습니다! 예상: .$extension, 실제: 다른 시그니처.\n";
-
+    
 }
